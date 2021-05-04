@@ -1,0 +1,5 @@
+{
+  "net": {"listeners": {
+    "plain_telnet": "192.168.1.51:7999"
+  }}
+}
