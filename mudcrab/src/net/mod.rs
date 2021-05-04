@@ -46,7 +46,8 @@ pub struct Connection {
     pub addr: SocketAddr,
     pub tls: Option<usize>,
     pub read_buff: BytesMut,
-    pub write_buff: BytesMut
+    pub write_buff: BytesMut,
+    pub write_ready: bool
 }
 
 #[derive(Debug)]

@@ -39,7 +39,6 @@ impl Engine {
         if let Some(l) = self.listeners.get_mut(key) {
             self.listen_poll.poller.registry().register(&mut l.listener, Token(key), Interest::READABLE)?;
         }
-        println!("Registerd a listener: {}", key);
         Ok(Token(key))
     }
 
@@ -77,7 +76,8 @@ impl Engine {
             ctype: ctype,
             read_buff: BytesMut::default(),
             write_buff: BytesMut::default(),
-            tls: None
+            tls: None,
+            write_ready: false
         };
         let key = self.connections.insert(conn);
         if let Some(c) = self.connections.get_mut(key) {
@@ -96,8 +96,23 @@ impl Engine {
         for event in self.listen_poll.events.iter() {
             let key = event.token().0;
             if let Some(l) = self.listeners.get_mut(key) {
-                if let Ok((t, a)) = l.listener.accept() {
-                    new_conns.push((t, a, l.protocol.clone(), l.ctype.clone()));
+                loop {
+                    match l.listener.accept() {
+                        Ok((t, a)) => {
+                            new_conns.push((t, a, l.protocol.clone(), l.ctype.clone()));
+                        },
+                        Err(e) => {
+                            match e.kind() {
+                                ErrorKind::WouldBlock => {
+                                    break;
+                                },
+                                _ => {
+                                    // now what?
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -134,10 +149,12 @@ impl Engine {
 
     }
 
-    fn run_conn_reader(&mut self, read_ready: Vec<usize>) {
+    fn run_conn_reader(&mut self, read_ready: Vec<usize>) -> Vec<usize> {
         let mut read_bucket: [u8; 2048]= [0; 2048];
+        let mut out: Vec<usize> = Vec::with_capacity(read_ready.len());
 
         for key in read_ready {
+            let mut total_bytes: usize = 0;
             if let Some(l) = self.connections.get_mut(key) {
                 loop {
                     match l.stream.read(&mut read_bucket) {
@@ -145,6 +162,7 @@ impl Engine {
                             if len == 0 {
                                 // oops, this one disconnected.
                             } else {
+                                total_bytes += len;
                                 l.read_buff.extend_from_slice(&read_bucket[..len]);
                             }
                         },
@@ -162,6 +180,68 @@ impl Engine {
                         }
                     }
                 }
+                if total_bytes > 0 {
+                    out.push(key);
+                }
+            }
+        }
+        out
+    }
+
+    fn run_process_reader_data(&mut self, readers: Vec<usize>) {
+        for key in readers {
+            if let Some(c) = self.connections.get_mut(key) {
+
+                println!("Connection {} has data: {:?}", key, c.read_buff.as_ref());
+
+            }
+        }
+    }
+
+    fn run_conn_writer(&mut self, writers: Vec<usize>) -> Vec<usize> {
+        let mut out: Vec<usize> = Vec::with_capacity(writers.len());
+        for key in writers {
+            if let Some(c) = self.connections.get_mut(key) {
+                c.write_ready = true;
+            }
+        }
+
+        for (key, conn) in &self.connections {
+            if conn.write_ready & !conn.write_buff.is_empty() {
+                out.push(key);
+            }
+        }
+        out
+    }
+
+    fn run_conn_writer_send(&mut self, writers: Vec<usize>) {
+        for key in writers {
+            if let Some(c) = self.connections.get_mut(key) {
+                let mut total_bytes: usize = 0;
+                loop {
+                    match c.stream.write(c.write_buff.as_ref()) {
+                        Ok(len) => {
+                            total_bytes += len;
+                            c.write_buff.advance(len);
+                            if c.write_buff.is_empty() {
+                                c.write_ready = false;
+                                break;
+                            }
+                        },
+                        Err(e) => {
+                            match e.kind() {
+                                ErrorKind::WouldBlock => {
+                                    c.write_ready = false;
+                                    break;
+                                },
+                                _ => {
+                                    // OOps what happened here?
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -169,9 +249,18 @@ impl Engine {
     pub fn run(&mut self) {
         loop {
             self.run_poll_listeners();
+
             let mut conn_ready = self.run_poll_connections();
+
             let (read_ready, write_ready) = conn_ready;
-            self.run_conn_reader(read_ready);
+
+            let readers_with_data = self.run_conn_reader(read_ready);
+
+            let writers_with_data = self.run_conn_writer(write_ready);
+            self.run_conn_writer_send(writers_with_data);
+
+            self.run_process_reader_data(readers_with_data);
+
         }
     }
 
