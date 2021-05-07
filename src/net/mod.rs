@@ -1,19 +1,21 @@
-//pub mod telnet;
+use legion::Entity;
 use mio::net::{TcpListener, TcpStream};
 use std::net::SocketAddr;
 use std::io::{Result, Write};
 use serde::de::Error;
-use std::time::Duration;
 use mio::{Events, Poll, Token};
 use bytes::{Bytes, BytesMut, Buf, BufMut};
 use serde_derive::{Serialize, Deserialize};
 use rustls::{ServerSession, StreamOwned, ServerConfig, Session};
 use std::sync::Arc;
 use std::fmt::{Debug, Formatter};
+use std::time::{Instant, Duration};
 
 pub mod telnet;
-use crate::net::telnet::{TelnetProtocol, TelnetMessage, TelnetEvent, TelnetOption};
-use std::collections::{HashMap, HashSet};
+use crate::net::telnet::{TelnetProtocol, TelnetMessage, TelnetOption};
+use std::collections::{HashMap, HashSet, VecDeque};
+use crate::mudstring::color::{ColorSystem};
+use crate::mudstring::text::{Text};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Protocol {
@@ -182,20 +184,18 @@ pub struct ProtocolCapabilities {
     pub protocol: Protocol,
     pub client_name: String,
     pub client_version: String,
+    pub color: Option<ColorSystem>,
     pub utf8: bool,
     pub html: bool,
     pub mxp: bool,
     pub gmcp: bool,
     pub msdp: bool,
     pub mssp: bool,
-    pub ansi: bool,
     pub mtts: bool,
     pub naws: bool,
     pub mccp2: bool,
     pub sga: bool,
     pub linemode: bool,
-    pub xterm256: bool,
-    pub truecolor: bool,
     pub width: u16,
     pub height: u16,
     pub screen_reader: bool,
@@ -213,20 +213,18 @@ impl Default for ProtocolCapabilities {
             protocol: Protocol::Telnet,
             client_name: "UNKNOWN".to_string(),
             client_version: "UNKNOWN".to_string(),
+            color: None,
             utf8: false,
             html: false,
             mxp: false,
             gmcp: false,
             msdp: false,
             mssp: false,
-            ansi: false,
             mtts: false,
             naws: false,
             mccp2: false,
             sga: false,
             linemode: false,
-            xterm256: false,
-            truecolor: false,
             width: 78,
             height: 24,
             screen_reader: false,
@@ -253,18 +251,14 @@ impl ProtocolCapabilities {
         out.gmcp = true;
         out.oob = true;
         out.msdp = true;
-        out.ansi = true;
-        out.xterm256 = true;
-        out.truecolor = true;
+        out.color = Some(ColorSystem::TrueColor);
         out
     }
 
     pub fn ssh() -> Self {
         let mut out = ProtocolCapabilities::default();
         out.protocol = Protocol::SSH;
-        out.ansi = true;
-        out.xterm256 = true;
-        out.truecolor = true;
+        out.color = Some(ColorSystem::TrueColor);
         out
     }
 }
@@ -277,30 +271,68 @@ pub enum ProtocolType {
 }
 
 #[derive(Debug)]
+pub enum ProtocolEvent {
+    Line(String),
+    OOB(String, Vec<String>, HashMap<String, String>),
+    RequestMSSP,
+
+}
+
+#[derive(Debug)]
+pub enum ProtocolOutEvent {
+    Line(Text),
+    OOB(String, Vec<String>, HashMap<String, String>),
+    Prompt(Text),
+    MSSP(Vec<(String, String)>)
+}
+
+#[derive(Debug)]
+pub enum ProtocolStatus {
+    Negotiating,
+    Active
+}
+
+#[derive(Debug)]
 pub struct ProtocolComponent {
     pub ptype: ProtocolType,
-    pub capabilities: ProtocolCapabilities
+    pub pstatus: ProtocolStatus,
+    pub capabilities: ProtocolCapabilities,
+    pub buffer: VecDeque<ProtocolEvent>,
+    pub created: Instant,
+    pub session: Option<Entity>
 }
 
 impl ProtocolComponent {
     pub fn telnet(options: Arc<HashMap<u8, TelnetOption>>) -> Self {
         Self {
             ptype: ProtocolType::Telnet(TelnetProtocol::new(options)),
-            capabilities: ProtocolCapabilities::telnet()
+            pstatus: ProtocolStatus::Negotiating,
+            capabilities: ProtocolCapabilities::telnet(),
+            created: Instant::now(),
+            buffer: Default::default(),
+            session: None
         }
     }
 
     pub fn websocket() -> Self {
         Self {
             ptype: ProtocolType::WebSocket,
-            capabilities: ProtocolCapabilities::websocket()
+            pstatus: ProtocolStatus::Negotiating,
+            capabilities: ProtocolCapabilities::websocket(),
+            created: Instant::now(),
+            buffer: Default::default(),
+            session: None
         }
     }
 
     pub fn ssh() -> Self {
         Self {
             ptype: ProtocolType::SSH,
-            capabilities: ProtocolCapabilities::ssh()
+            pstatus: ProtocolStatus::Negotiating,
+            capabilities: ProtocolCapabilities::ssh(),
+            created: Instant::now(),
+            buffer: Default::default(),
+            session: None
         }
     }
 
@@ -318,11 +350,28 @@ impl ProtocolComponent {
     pub fn process_new_data(&mut self, conn: &mut ConnectionComponent) {
         match &mut self.ptype {
             ProtocolType::Telnet(telnet) => {
-                let mut events: Vec<TelnetEvent> = Vec::default();
 
                 while let Some((msg, len)) = TelnetMessage::from_bytes(conn.read_buff.as_ref()) {
                     conn.read_buff.advance(len);
-                    telnet.process_message(msg, &mut events, conn, &mut self.capabilities);
+                    telnet.process_message(msg, &mut self.buffer, conn, &mut self.capabilities);
+                }
+            },
+            _ => {
+
+            }
+        }
+    }
+
+    pub fn send_event(&mut self, event: ProtocolOutEvent, conn: &mut ConnectionComponent) {
+        match &mut self.ptype {
+            ProtocolType::Telnet(telnet) => {
+                match event {
+                    ProtocolOutEvent::Line(text) => {
+                        telnet.send_text(conn, text.render(self.capabilities.color, false, false, self.capabilities.mxp));
+                    },
+                    _ => {
+
+                    }
                 }
             },
             _ => {

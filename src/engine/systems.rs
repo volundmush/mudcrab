@@ -1,12 +1,14 @@
 use legion::*;
+use crate::engine::Delta;
 use crate::engine::resources::{ListenPoll, ConnPoll, TelnetOptions};
-use crate::net::{ConnectionComponent, ListenerComponent, TransportType,
-                 Protocol, ConnType, ConnectionStatus, ProtocolComponent};
+use crate::net::{ConnectionComponent, ListenerComponent, TransportType, ProtocolStatus,
+                 Protocol, ConnType, ConnectionStatus, ProtocolComponent, ProtocolType};
 use std::io::{Error, ErrorKind, Read, Write};
 use legion::systems::CommandBuffer;
 use mio::{Events, Poll, Token, Interest};
 use mio::net::TcpStream;
 use bytes::Buf;
+use std::time::{Duration, Instant};
 
 #[system]
 pub fn poll_listeners(#[resource] lis_poll: &mut ListenPoll) {
@@ -132,4 +134,34 @@ pub fn process_connection_outgoing(conn: &mut ConnectionComponent, #[resource] c
         }
     }
 
+}
+
+#[system(par_for_each)]
+pub fn connection_health_check(conn: &mut ConnectionComponent, prot: &mut ProtocolComponent, #[resource] delta: &Delta) {
+    match prot.pstatus {
+        ProtocolStatus::Negotiating => {
+            match &prot.ptype {
+                ProtocolType::Telnet(mut telnet) => {
+                    if telnet.handshakes_left.is_empty() {
+                        prot.pstatus = ProtocolStatus::Active;
+                        // TODO: send the welcome screen here!
+                    } else if prot.created.elapsed().as_millis() > 300 {
+                        // if this much time has passed and a telnet connection still hasn't gone
+                        // active... just mark it active.
+                        prot.pstatus = ProtocolStatus::Active;
+                        // TODO: send the welcome screen here!
+                    }
+                },
+                ProtocolType::WebSocket => {
+
+                },
+                ProtocolType::SSH => {
+
+                }
+            }
+        },
+        ProtocolStatus::Active => {
+
+        }
+    }
 }

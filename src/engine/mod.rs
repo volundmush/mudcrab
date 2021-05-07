@@ -23,7 +23,7 @@ use crate::engine::resources::{
 
 use crate::engine::systems::{
     poll_listeners_system, accept_new_connections_system,
-    poll_connections_system, process_connection_read_system,
+    poll_connections_system, process_connection_read_system, connection_health_check_system,
     process_connection_newdata_system, process_connection_outgoing_system
 };
 
@@ -110,6 +110,7 @@ impl Engine {
             .add_system(process_connection_read_system())
             .add_system(process_connection_newdata_system())
             .add_system(process_connection_outgoing_system())
+            .add_system(connection_health_check_system())
             .build();
 
         let mut delta = interval.clone();

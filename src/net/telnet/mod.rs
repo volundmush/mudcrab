@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     vec::Vec,
     io::Write,
     io::Read,
@@ -7,21 +7,9 @@ use std::{
 use std::sync::Arc;
 
 pub mod codes;
-use crate::net::{ConnectionComponent, ProtocolComponent, ProtocolCapabilities};
+use crate::net::{ConnectionComponent, ProtocolComponent, ProtocolCapabilities, ProtocolEvent};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-
-#[derive(Clone, Debug)]
-pub enum TelnetEvent {
-    Line(String),
-    Command(u8),
-    LocalEnable(u8),
-    LocalDisable(u8),
-    RemoteEnable(u8),
-    RemoteDisable(u8),
-    LocalHandshake(u8),
-    RemoteHandshake(u8),
-    SubData(u8, Vec<u8>)
-}
+use crate::mudstring::color::{ColorSystem};
 
 #[derive(Clone, Debug)]
 pub enum TelnetMessage {
@@ -173,7 +161,22 @@ impl TelnetProtocol {
         }
     }
 
+    pub fn send_text(&self, mut writer: &mut impl Write, data: String) {
+        // TODO: Escape IAC, handle SGA
+        self.send_data(writer, data.as_bytes());
+    }
+
+    pub fn send_prompt(&self, mut writer: &mut impl Write, data: String) {
+
+    }
+
+    pub fn send_line(&self, mut writer: &mut impl Write, data: String) {
+        // TODO: Escape IAC, handle SGA
+        self.send_data(writer, data.as_bytes());
+    }
+
     fn send_data(&self, mut writer: &mut impl Write, data: impl AsRef<[u8]>) {
+        // TODO: Implement MCCP2
         writer.write_all(data.as_ref());
     }
 
@@ -199,7 +202,7 @@ impl TelnetProtocol {
         self.send_data(writer, out);
     }
 
-    pub fn process_message(&mut self, msg: TelnetMessage, mut out: &mut Vec<TelnetEvent>,
+    pub fn process_message(&mut self, msg: TelnetMessage, mut out: &mut VecDeque<ProtocolEvent>,
                            mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
         match msg {
             TelnetMessage::SubNegotiate(op, data) => self.receive_sub(op, data, out, writer, capabilities),
@@ -209,11 +212,11 @@ impl TelnetProtocol {
         }
     }
 
-    fn receive_command(&mut self, command: u8, mut out: &mut Vec<TelnetEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
+    fn receive_command(&mut self, command: u8, mut out: &mut VecDeque<ProtocolEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
 
     }
 
-    fn receive_sub(&mut self, op: u8, data: Vec<u8>, mut out: &mut Vec<TelnetEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
+    fn receive_sub(&mut self, op: u8, data: Vec<u8>, mut out: &mut VecDeque<ProtocolEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
         if !self.op_state.contains_key(&op) {
             // Only if we can get a handler, do we want to care about this.
             // All other sub-data is ignored.
@@ -231,7 +234,7 @@ impl TelnetProtocol {
         }
     }
 
-    fn receive_mtts(&mut self, data: Vec<u8>, mut out: &mut Vec<TelnetEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
+    fn receive_mtts(&mut self, data: Vec<u8>, mut out: &mut VecDeque<ProtocolEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
         let mut new_data = BytesMut::with_capacity(data.len());
         new_data.extend(data);
         
@@ -283,7 +286,7 @@ impl TelnetProtocol {
         }
     }
 
-    fn receive_mtts_0(&mut self, data: String, mut out: &mut Vec<TelnetEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
+    fn receive_mtts_0(&mut self, data: String, mut out: &mut VecDeque<ProtocolEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
         // The first mtts receives the name of the client.
         // version might also be in here as a second word.
         if data.contains(" ") {
@@ -298,40 +301,31 @@ impl TelnetProtocol {
         let mut extra_check = false;
         match capabilities.client_name.as_str() {
             "ATLANTIS" => {
-                capabilities.xterm256 = true;
-                capabilities.ansi = true;
+                capabilities.color = Some(ColorSystem::TrueColor);
             },
             "CMUD" => {
-                capabilities.xterm256 = true;
-                capabilities.ansi = true;
+                capabilities.color = Some(ColorSystem::TrueColor);
             },
             "KILDCLIENT" => {
-                capabilities.xterm256 = true;
-                capabilities.ansi = true;
+                capabilities.color = Some(ColorSystem::TrueColor);
             },
             "MUDLET" => {
-                capabilities.xterm256 = true;
-                capabilities.ansi = true;
+                capabilities.color = Some(ColorSystem::TrueColor);
             },
             "MUSHCLIENT" => {
-                capabilities.xterm256 = true;
-                capabilities.ansi = true;
+                capabilities.color = Some(ColorSystem::TrueColor);
             },
             "PUTTY" => {
-                capabilities.xterm256 = true;
-                capabilities.ansi = true;
+                capabilities.color = Some(ColorSystem::TrueColor);
             },
             "BEIP" => {
-                capabilities.xterm256 = true;
-                capabilities.ansi = true;
+                capabilities.color = Some(ColorSystem::TrueColor);
             },
             "POTATO" => {
-                capabilities.xterm256 = true;
-                capabilities.ansi = true;
+                capabilities.color = Some(ColorSystem::TrueColor);
             },
             "TINYFUGUE" => {
-                capabilities.xterm256 = true;
-                capabilities.ansi = true;
+                capabilities.color = Some(ColorSystem::TrueColor);
             }
             _ => {
                 extra_check = true;
@@ -339,20 +333,18 @@ impl TelnetProtocol {
         }
         if extra_check {
             if capabilities.client_name.starts_with("XTERM") || capabilities.client_name.ends_with("-256COLOR") {
-                capabilities.xterm256 = true;
-                capabilities.ansi = true;
+                capabilities.color = Some(ColorSystem::TrueColor);
             }
         }
     }
 
-    fn receive_mtts_1(&mut self, data: String, mut out: &mut Vec<TelnetEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
+    fn receive_mtts_1(&mut self, data: String, mut out: &mut VecDeque<ProtocolEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
         if data.starts_with("XTERM") || data.ends_with("-256COLOR") {
-            capabilities.xterm256 = true;
-            capabilities.ansi = true;
+            capabilities.color = Some(ColorSystem::TrueColor);
         }
     }
 
-    fn receive_mtts_2(&mut self, data: String, mut out: &mut Vec<TelnetEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
+    fn receive_mtts_2(&mut self, data: String, mut out: &mut VecDeque<ProtocolEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
         if !data.starts_with("MTTS ") {
             return;
         }
@@ -363,7 +355,9 @@ impl TelnetProtocol {
             return;
         }
         if (1 & mtts) == 1 {
-            capabilities.ansi = true;
+            if capabilities.color.is_none() {
+                capabilities.color = Some(ColorSystem::Standard);
+            }
         }
         if (2 & mtts) == 2 {
             capabilities.vt100 = true;
@@ -372,7 +366,7 @@ impl TelnetProtocol {
             capabilities.utf8 = true;
         }
         if (8 & mtts) == 8 {
-            capabilities.xterm256 = true;
+            capabilities.color = Some(ColorSystem::EightBit);
         }
         if (16 & mtts) == 16 {
             capabilities.mouse_tracking = true;
@@ -387,7 +381,7 @@ impl TelnetProtocol {
             capabilities.proxy = true;
         }
         if (256 & mtts) == 256 {
-            capabilities.truecolor = true;
+            capabilities.color = Some(ColorSystem::TrueColor);
         }
         if (512 & mtts) == 512 {
             capabilities.mnes = true;
@@ -395,7 +389,7 @@ impl TelnetProtocol {
 
     }
     
-    fn receive_naws(&mut self, mut data: Vec<u8>, mut out: &mut Vec<TelnetEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
+    fn receive_naws(&mut self, mut data: Vec<u8>, mut out: &mut VecDeque<ProtocolEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
         let mut new_data = BytesMut::with_capacity(data.len());
         new_data.extend(data);
         if new_data.len() >= 4 {
@@ -404,18 +398,18 @@ impl TelnetProtocol {
         }
     }
     
-    fn receive_data(&mut self, data: Vec<u8>, mut out: &mut Vec<TelnetEvent>) {
+    fn receive_data(&mut self, data: Vec<u8>, mut out: &mut VecDeque<ProtocolEvent>) {
         self.app_buffer.extend(data);
         while let Some(ipos) = self.app_buffer.as_ref().iter().position(|b| b == &codes::LF) {
             let cmd = self.app_buffer.split_to(ipos);
             if let Ok(s) = String::from_utf8(cmd.to_vec()) {
-                out.push(TelnetEvent::Line(s.trim().to_string()));
+                out.push_back(ProtocolEvent::Line(s.trim().to_string()));
             }
             self.app_buffer.advance(1);
         }
     }
 
-    fn receive_negotiate(&mut self, command: u8, op: u8, mut out: &mut Vec<TelnetEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
+    fn receive_negotiate(&mut self, command: u8, op: u8, mut out: &mut VecDeque<ProtocolEvent>, mut writer: &mut impl Write, mut capabilities: &mut ProtocolCapabilities) {
         let mut handshake: u8 = 0;
         let mut enable_local = false;
         let mut disable_local = false;
@@ -504,10 +498,10 @@ impl TelnetProtocol {
             let _ = self.send_data(writer,&[codes::IAC, respond, op]);
         }
         if handshake_local > 0 {
-            out.push(TelnetEvent::LocalHandshake(op));
+
         }
         if handshake_remote > 0 {
-            out.push(TelnetEvent::RemoteHandshake(op));
+
         }
         if enable_local {
             self.enable_local(op, out, writer, capabilities);
@@ -523,7 +517,7 @@ impl TelnetProtocol {
         }
     }
 
-    fn enable_local(&mut self, op: u8, mut out: &mut Vec<TelnetEvent>, mut writer: &mut impl Write,
+    fn enable_local(&mut self, op: u8, mut out: &mut VecDeque<ProtocolEvent>, mut writer: &mut impl Write,
                     mut capabilities: &mut ProtocolCapabilities) {
         match op {
             codes::SGA => {
@@ -539,7 +533,7 @@ impl TelnetProtocol {
         }
     }
 
-    fn enable_remote(&mut self, op: u8, mut out: &mut Vec<TelnetEvent>, mut writer: &mut impl Write,
+    fn enable_remote(&mut self, op: u8, mut out: &mut VecDeque<ProtocolEvent>, mut writer: &mut impl Write,
                     mut capabilities: &mut ProtocolCapabilities) {
         match op {
             codes::NAWS => capabilities.naws = true,
@@ -556,7 +550,7 @@ impl TelnetProtocol {
         }
     }
 
-    fn disable_remote(&mut self, op: u8, mut out: &mut Vec<TelnetEvent>, mut writer: &mut impl Write,
+    fn disable_remote(&mut self, op: u8, mut out: &mut VecDeque<ProtocolEvent>, mut writer: &mut impl Write,
                      mut capabilities: &mut ProtocolCapabilities) {
         match op {
             codes::NAWS => {
@@ -575,7 +569,7 @@ impl TelnetProtocol {
         }
     }
 
-    fn disable_local(&mut self, op: u8, mut out: &mut Vec<TelnetEvent>, mut writer: &mut impl Write,
+    fn disable_local(&mut self, op: u8, mut out: &mut VecDeque<ProtocolEvent>, mut writer: &mut impl Write,
                       mut capabilities: &mut ProtocolCapabilities) {
         match op {
             codes::SGA => {
