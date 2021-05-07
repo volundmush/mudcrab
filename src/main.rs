@@ -9,5 +9,5 @@ fn main() {
     let mut eng = Engine::new(conf);
     eng.setup();
     eng.run();
-    println!("Hello, Config: {:?}", eng);
+    println!("Hello, Config: {:?}", eng.config);
 }
