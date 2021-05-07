@@ -18,7 +18,7 @@ impl Default for TelnetOptions {
         map.insert(tc::SGA, TelnetOption {allow_local: true, allow_remote: true, start_remote: false, start_local: true});
         map.insert(tc::NAWS, TelnetOption {allow_local: false, allow_remote: true, start_remote: true, start_local: false});
         map.insert(tc::MTTS, TelnetOption {allow_local: false, allow_remote: true, start_remote: true, start_local: false});
-        map.insert(tc::MXP, TelnetOption {allow_local: true, allow_remote: true, start_remote: false, start_local: true});
+        //map.insert(tc::MXP, TelnetOption {allow_local: true, allow_remote: true, start_remote: false, start_local: true});
         map.insert(tc::MSSP, TelnetOption {allow_local: true, allow_remote: true, start_remote: false, start_local: true});
         //map.insert(tc::MCCP2, TelnetOption {allow_local: true, allow_remote: true, start_remote: false, start_local: true});
         //map.insert(tc::MCCP3, TelnetOption {allow_local: true, allow_remote: true, start_remote: false, start_local: true});
@@ -62,6 +62,7 @@ impl ConnPoll {
                 self.read_ready.push(key);
             }
             if event.is_writable() {
+                println!("{} is writable!", key.0);
                 self.write_ready.push(key);
             }
         }

@@ -1,16 +1,21 @@
 use legion::Entity;
 use std::collections::{
-    HashMap, HashSet
+    HashMap, HashSet, VecDeque
 };
 
 use serde_derive::{Serialize, Deserialize};
 use std::time::{Instant, Duration};
+use crate::net::{ProtocolOutEvent, ProtocolEvent};
 
 #[derive(Debug)]
 pub struct MudSession {
     pub user: Entity,
-    pub mobile: Entity,
-    pub created: Instant
+    pub player: Entity,
+    pub puppet: Entity,
+    pub created: Instant,
+    pub in_events: VecDeque<ProtocolEvent>,
+    pub out_events: VecDeque<ProtocolOutEvent>,
+    pub connections: HashSet<Entity>
 }
 
 #[derive(Debug)]
@@ -22,7 +27,7 @@ pub struct ModuleComponent {
     pub protected: bool
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Hash)]
 pub enum MudObjectType {
     Alliance,
     Board,
@@ -32,6 +37,7 @@ pub enum MudObjectType {
     HeavenlyBody,
     Item,
     Mobile,
+    Player,
     Room,
     Sector,
     User,
@@ -43,6 +49,7 @@ pub enum MudObjectType {
 #[derive(Debug)]
 pub struct MudProtoTypeComponent {
     pub objid: String,
+    pub name: String,
     pub entity: Entity,
     pub objtype: MudObjectType,
     pub module: Entity,
@@ -56,6 +63,7 @@ pub struct MudObjectSession {
 #[derive(Debug)]
 pub struct MudObjectComponent {
     pub objid: String,
+    pub name: String,
     pub entity: Entity,
     pub objtype: MudObjectType,
     pub module: Entity,

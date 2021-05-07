@@ -2,13 +2,19 @@ use legion::*;
 use crate::engine::Delta;
 use crate::engine::resources::{ListenPoll, ConnPoll, TelnetOptions};
 use crate::net::{ConnectionComponent, ListenerComponent, TransportType, ProtocolStatus,
-                 Protocol, ConnType, ConnectionStatus, ProtocolComponent, ProtocolType};
+                 Protocol, ConnType, ConnectionStatus, ProtocolComponent, ProtocolType,
+                 ProtocolEvent, ProtocolOutEvent};
 use std::io::{Error, ErrorKind, Read, Write};
 use legion::systems::CommandBuffer;
 use mio::{Events, Poll, Token, Interest};
 use mio::net::TcpStream;
 use bytes::Buf;
 use std::time::{Duration, Instant};
+use crate::game::objects::{MudSession};
+use std::collections::{VecDeque, HashSet, HashMap};
+use crate::game::process::ProcessComponent;
+use crate::game::login_cmds::{LoginCommands};
+use crate::game::resources::{ProcessCounter, ProcessIndex, PendingUserCreations};
 
 #[system]
 pub fn poll_listeners(#[resource] lis_poll: &mut ListenPoll) {
@@ -112,7 +118,11 @@ pub fn process_connection_newdata(conn: &mut ConnectionComponent, prot: &mut Pro
 #[system(par_for_each)]
 pub fn process_connection_outgoing(conn: &mut ConnectionComponent, #[resource] conn_poll: &ConnPoll) {
 
-    if !conn_poll.write_ready.contains(&conn.token) {
+    if conn_poll.write_ready.contains(&conn.token) {
+        conn.write_ready = true;
+    }
+
+    if !conn.write_ready {
         return;
     }
 
@@ -124,6 +134,7 @@ pub fn process_connection_outgoing(conn: &mut ConnectionComponent, #[resource] c
             Err(e) => {
                 match e.kind() {
                     ErrorKind::WouldBlock => {
+                        conn.write_ready = false;
                         break;
                     },
                     _ => {
@@ -133,35 +144,100 @@ pub fn process_connection_outgoing(conn: &mut ConnectionComponent, #[resource] c
             }
         }
     }
-
 }
 
 #[system(par_for_each)]
-pub fn connection_health_check(conn: &mut ConnectionComponent, prot: &mut ProtocolComponent, #[resource] delta: &Delta) {
-    match prot.pstatus {
-        ProtocolStatus::Negotiating => {
-            match &prot.ptype {
-                ProtocolType::Telnet(mut telnet) => {
-                    if telnet.handshakes_left.is_empty() {
-                        prot.pstatus = ProtocolStatus::Active;
-                        // TODO: send the welcome screen here!
-                    } else if prot.created.elapsed().as_millis() > 300 {
-                        // if this much time has passed and a telnet connection still hasn't gone
-                        // active... just mark it active.
-                        prot.pstatus = ProtocolStatus::Active;
-                        // TODO: send the welcome screen here!
-                    }
-                },
-                ProtocolType::WebSocket => {
+pub fn connection_health_check(conn: &mut ConnectionComponent, prot: &mut ProtocolComponent) {
+    prot.health_check(conn);
+}
 
-                },
-                ProtocolType::SSH => {
 
+#[system(for_each)]
+pub fn execute_connection_events(ent: &Entity, conn: &mut ConnectionComponent, prot: &mut ProtocolComponent, #[resource] lcmds: &mut LoginCommands) {
+    if prot.session.is_some() {
+        return
+    }
+
+    if let Some(ev) = prot.in_buffer.pop_front() {
+
+        match ev {
+            ProtocolEvent::Line(s) => {
+                if let Some(user) = prot.user {
+                    println!("This should not happen yet!");
+                    // TODO: this will call the function for running a menu screen command.
+                } else {
+                    lcmds.execute(prot, s);
                 }
-            }
-        },
-        ProtocolStatus::Active => {
+            },
+            ProtocolEvent::OOB(cmd, args, kwargs) => {
 
+            },
+            ProtocolEvent::RequestMSSP => {
+                // TODO: This should render MSSP data to a HashMap and push it to msess.out_events
+            },
+            ProtocolEvent::CreateUser(user, pass) => {
+
+            },
+            ProtocolEvent::Login(user, pass) => {
+
+            }
         }
     }
+}
+
+
+#[system(for_each)]
+pub fn transfer_events(cmd: &mut CommandBuffer, wrl: &mut World, msess: &mut MudSession) {
+    for ent in msess.connections.iter() {
+        if let Ok(mut entry) = wrl.entry_mut(*ent) {
+            if let Ok(mut prot) = entry.get_component_mut::<ProtocolComponent>() {
+                for ev in prot.in_buffer.iter() {
+                    msess.in_events.push_back(ev.clone());
+                }
+                prot.in_buffer.clear();
+
+                for ev in msess.out_events.iter() {
+                    prot.out_buffer.push_back(ev.clone());
+                }
+            }
+        }
+    }
+    msess.out_events.clear();
+}
+
+#[system(par_for_each)]
+pub fn send_out_events(prot: &mut ProtocolComponent, conn: &mut ConnectionComponent) {
+    while let Some(ev) = prot.out_buffer.pop_front() {
+        prot.send_event(ev, conn);
+    }
+}
+
+#[system(for_each)]
+pub fn session_in_events(cmd: &mut CommandBuffer, msess: &mut MudSession, #[resource] pid: &mut ProcessCounter, #[resource] pdx: &mut ProcessIndex) {
+    // Pop an event off of MudSession and execute it, if applicable.
+    if let Some(ev) = msess.in_events.pop_front() {
+        match ev {
+            ProtocolEvent::Line(s) => {
+                println!("Got a process command: {}", s);
+                pid.0 += 1;
+                let mut process = ProcessComponent::from_command(msess, pid.0, s);
+                let mut ent = cmd.push((process, ));
+                pdx.0.insert(pid.0, ent);
+            },
+            ProtocolEvent::OOB(cmd, args, kwargs) => {
+
+            },
+            ProtocolEvent::RequestMSSP => {
+                // TODO: This should render MSSP data to a HashMap and push it to msess.out_events
+            },
+            _ => {
+
+            }
+        }
+    }
+}
+
+#[system(for_each)]
+pub fn execute_process(ent: &Entity, proc: &mut ProcessComponent, wrl: &mut World, cmd: &mut CommandBuffer) {
+    println!("FOUND A PROCESS: {:?}", proc);
 }

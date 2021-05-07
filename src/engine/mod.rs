@@ -20,12 +20,22 @@ use crate::engine::resources::{
     ConnPoll, ListenPoll, TelnetOptions
 };
 
-
-use crate::engine::systems::{
-    poll_listeners_system, accept_new_connections_system,
-    poll_connections_system, process_connection_read_system, connection_health_check_system,
-    process_connection_newdata_system, process_connection_outgoing_system
+use crate::game::resources::{
+    UsersOnline, MudSessions, Modules, PendingUserCreations, PendingUserLogins,
+    ObjTypeIndex, ProcessCounter, ProcessIndex
 };
+
+use crate::game::login_cmds::{LoginCommands};
+
+
+use crate::engine::systems::{poll_listeners_system, accept_new_connections_system,
+                             transfer_events_system, poll_connections_system,
+                             process_connection_read_system, connection_health_check_system,
+                             process_connection_newdata_system, process_connection_outgoing_system,
+                             session_in_events_system, execute_process_system,
+                             execute_connection_events_system, send_out_events_system};
+use serde_json::value::Value::Object;
+use std::future::Pending;
 
 
 pub struct Delta(Duration);
@@ -49,6 +59,15 @@ impl Engine {
         resources.insert(listen_poll);
         resources.insert(conn_poll);
         resources.insert(TelnetOptions::default());
+        resources.insert(UsersOnline::default());
+        resources.insert(MudSessions::default());
+        resources.insert(Modules::default());
+        resources.insert(ObjTypeIndex::default());
+        resources.insert(ProcessCounter::default());
+        resources.insert(ProcessIndex::default());
+        resources.insert(PendingUserLogins::default());
+        resources.insert(PendingUserCreations::default());
+        resources.insert(LoginCommands::default());
 
         let w_options = WorldOptions {
             groups: vec![group_1],
@@ -113,13 +132,25 @@ impl Engine {
             .add_system(connection_health_check_system())
             .build();
 
+
+        let mut game_events_schedule = Schedule::builder()
+            .add_system(execute_connection_events_system())
+            .add_system(transfer_events_system())
+            .add_system(send_out_events_system())
+            .add_system(session_in_events_system())
+            .add_system(execute_process_system())
+            .build();
+
         let mut delta = interval.clone();
 
         loop {
             self.resources.insert(Delta(delta));
             let now = Instant::now();
             listen_schedule.execute(&mut self.world, &mut self.resources);
+
             socket_io_schedule.execute(&mut self.world, &mut self.resources);
+
+            game_events_schedule.execute(&mut self.world, &mut self.resources);
 
             delta = now.elapsed();
 

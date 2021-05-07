@@ -270,15 +270,16 @@ pub enum ProtocolType {
     SSH
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ProtocolEvent {
     Line(String),
     OOB(String, Vec<String>, HashMap<String, String>),
     RequestMSSP,
-
+    CreateUser(String, String),
+    Login(String, String)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ProtocolOutEvent {
     Line(Text),
     OOB(String, Vec<String>, HashMap<String, String>),
@@ -297,8 +298,10 @@ pub struct ProtocolComponent {
     pub ptype: ProtocolType,
     pub pstatus: ProtocolStatus,
     pub capabilities: ProtocolCapabilities,
-    pub buffer: VecDeque<ProtocolEvent>,
+    pub in_buffer: VecDeque<ProtocolEvent>,
+    pub out_buffer: VecDeque<ProtocolOutEvent>,
     pub created: Instant,
+    pub user: Option<Entity>,
     pub session: Option<Entity>
 }
 
@@ -309,7 +312,9 @@ impl ProtocolComponent {
             pstatus: ProtocolStatus::Negotiating,
             capabilities: ProtocolCapabilities::telnet(),
             created: Instant::now(),
-            buffer: Default::default(),
+            in_buffer: Default::default(),
+            out_buffer: Default::default(),
+            user: None,
             session: None
         }
     }
@@ -320,7 +325,9 @@ impl ProtocolComponent {
             pstatus: ProtocolStatus::Negotiating,
             capabilities: ProtocolCapabilities::websocket(),
             created: Instant::now(),
-            buffer: Default::default(),
+            in_buffer: Default::default(),
+            out_buffer: Default::default(),
+            user: None,
             session: None
         }
     }
@@ -331,7 +338,9 @@ impl ProtocolComponent {
             pstatus: ProtocolStatus::Negotiating,
             capabilities: ProtocolCapabilities::ssh(),
             created: Instant::now(),
-            buffer: Default::default(),
+            in_buffer: Default::default(),
+            out_buffer: Default::default(),
+            user: None,
             session: None
         }
     }
@@ -347,13 +356,42 @@ impl ProtocolComponent {
         }
     }
 
+    pub fn health_check(&mut self, conn: &mut ConnectionComponent) {
+        match &mut self.ptype {
+            ProtocolType::Telnet(telnet) => {
+                match self.pstatus {
+                    ProtocolStatus::Negotiating => {
+                        if telnet.handshakes_left.is_empty() {
+                            self.pstatus = ProtocolStatus::Active;
+                            // TODO: send the welcome screen here!
+                        } else if self.created.elapsed().as_millis() > 300 {
+                            // if this much time has passed and a telnet connection still hasn't gone
+                            // active... just mark it active.
+                            self.pstatus = ProtocolStatus::Active;
+                            // TODO: send the welcome screen here!
+                        }
+                    },
+                    ProtocolStatus::Active => {
+
+                    }
+                }
+            },
+            ProtocolType::WebSocket => {
+
+            },
+            ProtocolType::SSH => {
+
+            }
+        }
+    }
+
     pub fn process_new_data(&mut self, conn: &mut ConnectionComponent) {
         match &mut self.ptype {
             ProtocolType::Telnet(telnet) => {
 
                 while let Some((msg, len)) = TelnetMessage::from_bytes(conn.read_buff.as_ref()) {
                     conn.read_buff.advance(len);
-                    telnet.process_message(msg, &mut self.buffer, conn, &mut self.capabilities);
+                    telnet.process_message(msg, &mut self.in_buffer, conn, &mut self.capabilities);
                 }
             },
             _ => {
